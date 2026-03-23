@@ -1,0 +1,2 @@
+conda create -n py312 python=3.12 -y
+   conda activate py312
