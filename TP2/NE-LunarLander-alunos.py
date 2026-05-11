@@ -12,6 +12,9 @@ TURBULENCE_POWER = 0.0
 GRAVITY = -10.0
 RENDER_MODE = 'human'
 TEST_EPISODES = 1000
+EVALUATION_EPISODES = int(os.environ.get('EVALUATION_EPISODES', 10))
+EVALUATION_SEED_OFFSET = int(os.environ.get('EVALUATION_SEED_OFFSET', 0))
+USE_FIXED_EVALUATION_SEEDS = os.environ.get('USE_FIXED_EVALUATION_SEEDS', '0').lower() in ('1', 'true', 'yes')
 STEPS = 500
 
 NUM_PROCESSES = os.cpu_count()
@@ -30,22 +33,42 @@ POPULATION_SIZE = 100
 NUMBER_OF_GENERATIONS = 100
 PROB_CROSSOVER = 0.9
 
-PROB_MUTATION = 1.0/GENOTYPE_SIZE
-STD_DEV = 0.1
+# Valor base do enunciado para a experiencia 1/3/5/7.
+# Para as experiencias 2/4/6/8, trocar para 0.05.
+PROB_MUTATION = float(os.environ.get('PROB_MUTATION', 1.0/GENOTYPE_SIZE))
+STD_DEV = float(os.environ.get('STD_DEV', 0.1))
 
 
 ELITE_SIZE = 1
 
 def network(shape, observation,ind):
-    #Computes the output of the neural network given the observation and the genotype
+    # Computes the output of the neural network given the observation and the genotype.
+    # O genotype tem todos os pesos da rede numa unica lista.
+    # Como ha pesos para varias camadas, usamos weight_index para saber
+    # em que parte dessa lista estamos.
     x = observation[:]
+
+    # Entrada constante que funciona como bias.
+    # Sem isto, quando as observacoes estao perto de zero, a rede tende a
+    # produzir acoes perto de zero. No Lunar Lander isso pode deixar o motor
+    # principal desligado precisamente quando era preciso travar a descida.
+    if len(x) < shape[0]:
+        x = np.append(x, 1.0)
+
+    weight_index = 0
     for i in range(1,len(shape)):
         y = np.zeros(shape[i])
         for j in range(shape[i]):
             for k in range(len(x)):
-                y[j] += x[k]*ind[k+j*len(x)]
+                y[j] += x[k]*ind[weight_index + k+j*len(x)]
+        weight_index += len(x) * shape[i]
         x = np.tanh(y)
     return x
+
+def controller_action(shape, observation, genotype):
+    # Centraliza a escolha da acao num so sitio.
+    # Neste momento usamos diretamente a saida da rede, que ja esta em [-1, 1].
+    return network(shape, observation, genotype)
 
 def check_successful_landing(observation):
     #Checks the success of the landing based on the observation
@@ -68,54 +91,96 @@ def check_successful_landing(observation):
     return False
 
 def objective_function(observation_history):
-    # Trajectory-aware fitness: reward stable approach and good final touchdown state.
-    final_obs = observation_history[-1]
-    success = check_successful_landing(final_obs)
+    # Esta funcao da uma pontuacao (fitness) ao individuo.
+    # Quanto maior for o fitness, melhor foi o comportamento da nave.
+    # Usamos a ultima observacao porque e nela que o ambiente regista o
+    # resultado final depois de a nave tocar no chao ou terminar o episodio.
+    final_observation = observation_history[-1]
+    recent_observations = observation_history[-50:]
 
-    cumulative_penalty = 0.0
-    for obs in observation_history[:-1]:
-        x = obs[0]
-        y = obs[1]
-        vx = obs[2]
-        vy = obs[3]
-        theta = obs[4]
-        omega = obs[5]
+    # Cada posicao do vetor de observacao representa uma informacao da nave.
+    # x/y: posicao; vx/vy: velocidade; theta/vtheta: angulo e rotacao.
+    x = final_observation[0]
+    y = final_observation[1]
+    vx = final_observation[2]
+    vy = final_observation[3]
+    theta = final_observation[4]
+    vtheta = final_observation[5]
+    contact_left = final_observation[6]
+    contact_right = final_observation[7]
 
-        # Keep the lander close to center and descend in a controlled attitude.
-        cumulative_penalty += (
-            0.60 * abs(x)
-            + 0.20 * abs(y)
-            + 0.35 * abs(vx)
-            + 0.50 * max(0.0, -vy)
-            + 0.35 * abs(theta)
-            + 0.20 * abs(omega)
-        )
+    # Verifica se a nave cumpriu as condicoes formais de aterragem com sucesso.
+    successful_landing = check_successful_landing(final_observation)
+    legs_touching = contact_left == 1 and contact_right == 1
+    on_landing_pad = abs(x) <= 0.2
+    slow_vertical_speed = vy > -0.2
+    upright = abs(theta) < np.deg2rad(20)
 
-    avg_penalty = cumulative_penalty / max(1, len(observation_history) - 1)
+    # Para alem do ultimo estado, tambem olhamos para a parte final da
+    # trajetoria. Isto ajuda a distinguir uma aproximacao controlada de uma
+    # queda que por acaso termina perto da plataforma.
+    mean_abs_x = np.mean([abs(obs[0]) for obs in recent_observations])
+    mean_abs_vx = np.mean([abs(obs[2]) for obs in recent_observations])
+    mean_abs_theta = np.mean([abs(obs[4]) for obs in recent_observations])
+    mean_fast_fall = np.mean([max(0.0, -obs[3] - 0.25) for obs in recent_observations])
 
-    x = final_obs[0]
-    y = final_obs[1]
-    vx = final_obs[2]
-    vy = final_obs[3]
-    theta = final_obs[4]
-    omega = final_obs[5]
-    leg_contacts = final_obs[6] + final_obs[7]
+    # Comecamos a pontuacao em zero.
+    # Depois retiramos pontos por comportamentos maus e damos pontos por
+    # comportamentos bons. Penalizar abs(valor) significa que tanto valores
+    # negativos como positivos sao maus quando queremos estar perto de zero.
+    fitness = 0.0
 
-    final_state_penalty = (
-        2.00 * abs(x)
-        + 0.70 * abs(y)
-        + 1.00 * abs(vx)
-        + 1.40 * max(0.0, -vy)
-        + 1.00 * abs(theta)
-        + 0.60 * abs(omega)
-    )
+    # Penaliza fortemente estar longe da plataforma.
+    # O debugger mostrou que muitos individuos aterravam fora da zona correta.
+    fitness -= 250.0 * abs(x)
 
-    # Reward touching with both legs and strongly reward successful landings.
-    contact_bonus = 8.0 * leg_contacts
-    landing_bonus = 150.0 if success else 0.0
+    # Penaliza ainda mais quando passa para fora da margem da plataforma.
+    if not on_landing_pad:
+        fitness -= 600.0 * (abs(x) - 0.2)
 
-    fitness = landing_bonus + contact_bonus - final_state_penalty - avg_penalty
-    return fitness, success
+    # Penaliza estar longe do solo, mas menos do que estar longe do centro.
+    fitness -= 40.0 * abs(y)
+
+    # Penaliza velocidades altas. Para aterrar bem, a nave deve chegar devagar.
+    fitness -= 120.0 * abs(vx)
+    fitness -= 220.0 * abs(vy)
+
+    # Penaliza estar inclinada ou a rodar muito.
+    fitness -= 160.0 * abs(theta)
+    fitness -= 30.0 * abs(vtheta)
+
+    # Penaliza uma aproximacao final instavel. Estes termos usam varios passos
+    # recentes, nao apenas o ultimo frame.
+    fitness -= 80.0 * mean_abs_x
+    fitness -= 50.0 * mean_abs_vx
+    fitness -= 60.0 * mean_abs_theta
+    fitness -= 180.0 * mean_fast_fall
+
+    # Da premios por cumprir partes da aterragem, mas apenas quando fazem
+    # sentido. O debugger mostrou que premiar "estar lento" fora da plataforma
+    # ainda deixava aterragens erradas com bom fitness.
+    if on_landing_pad:
+        fitness += 150.0
+        if slow_vertical_speed:
+            fitness += 150.0
+        if upright:
+            fitness += 150.0
+        if legs_touching:
+            fitness += 250.0
+    elif legs_touching:
+        # Tocar com as duas pernas fora da plataforma nao deve parecer uma boa
+        # solucao para o algoritmo evolucionario.
+        fitness -= 300.0
+
+    # Grande bonus se a aterragem for considerada bem sucedida.
+    # Isto ajuda a evolucao a preferir claramente individuos que aterram.
+    if successful_landing:
+        fitness += 2000.0
+
+    # A funcao devolve duas coisas:
+    # 1) o fitness usado pelo algoritmo evolucionario;
+    # 2) True/False a dizer se a aterragem foi bem sucedida.
+    return fitness, successful_landing
 
 def simulate(genotype, render_mode = None, seed=None, env = None):
     #Simulates an episode of Lunar Lander, evaluating an individual
@@ -131,7 +196,7 @@ def simulate(genotype, render_mode = None, seed=None, env = None):
     observation_history = [observation]
     for _ in range(STEPS):
         #Chooses an action based on the individual's genotype
-        action = network(SHAPE, observation, genotype)
+        action = controller_action(SHAPE, observation, genotype)
         observation, reward, terminated, truncated, info = env.step(action)        
         observation_history.append(observation)
 
@@ -157,7 +222,19 @@ def evaluate(evaluationQueue, evaluatedQueue):
         if ind is None:
             break
             
-        ind['fitness'] = simulate(ind['genotype'], seed = None, env = env)[0]
+        # Avaliamos o mesmo individuo em varios episodios e usamos a media.
+        # Isto reduz o efeito de "teve sorte numa tentativa" e favorece
+        # controladores que funcionam de forma mais consistente.
+        fitness = 0.0
+        for episode in range(EVALUATION_EPISODES):
+            # Por defeito usamos episodios aleatorios para evitar overfitting a
+            # um pequeno conjunto de seeds. Se quiseres experimentar seeds fixas:
+            # USE_FIXED_EVALUATION_SEEDS=1 EVALUATION_SEED_OFFSET=0
+            seed = None
+            if USE_FIXED_EVALUATION_SEEDS:
+                seed = EVALUATION_SEED_OFFSET + episode
+            fitness += simulate(ind['genotype'], seed = seed, env = env)[0]
+        ind['fitness'] = fitness / EVALUATION_EPISODES
                 
         evaluatedQueue.put(ind)
     env.close()
@@ -187,40 +264,65 @@ def generate_initial_population():
     return population
 
 def parent_selection(population):
-    # Tournament selection: sample a few individuals and pick the fittest.
-    tournament_size = min(5, len(population))
-    candidates = random.sample(population, tournament_size)
-    parent = max(candidates, key=lambda ind: ind['fitness'])
-    return copy.deepcopy(parent)
+    # Selecao por torneio:
+    # escolhemos alguns individuos ao acaso e, entre esses, fica o melhor.
+    # Assim damos vantagem a quem tem bom fitness, mas sem eliminar totalmente
+    # a aleatoriedade, que e importante para manter diversidade.
+    tournament_size = 3
+    tournament = random.sample(population, tournament_size)
+    winner = max(tournament, key=lambda x: x['fitness'])
+
+    # Devolvemos uma copia para evitar alterar diretamente o individuo original.
+    return copy.deepcopy(winner)
 
 def crossover(p1, p2):
-    # One-point crossover on the genotype vectors.
-    g1 = p1['genotype']
-    g2 = p2['genotype']
+    # Crossover aritmetico:
+    # cria um filho misturando os pesos (genes) dos dois pais.
+    # Cada gene do filho fica entre o valor do gene do pai 1 e do pai 2.
+    genotype = []
 
-    if len(g1) <= 1:
-        child_genotype = g1[:]
-    else:
-        cut = random.randint(1, len(g1) - 1)
-        child_genotype = g1[:cut] + g2[cut:]
+    # O genotype e a lista de pesos da rede neuronal.
+    # gene1 e gene2 sao o mesmo peso/ligacao, mas em pais diferentes.
+    for gene1, gene2 in zip(p1['genotype'], p2['genotype']):
+        # Usamos um alpha diferente para cada gene. Isto gera filhos mais
+        # variados do que usar a mesma mistura para a rede inteira.
+        alpha = random.random()
+        genotype.append(alpha * gene1 + (1.0 - alpha) * gene2)
 
-    return {'genotype': child_genotype, 'fitness': None}
+    # O filho ainda nao foi avaliado, por isso o fitness comeca como None.
+    return {'genotype': genotype, 'fitness': None}
 
 def mutation(p):
-    # Gaussian mutation applied independently to each gene.
-    genotype = p['genotype'][:]
-    for i in range(len(genotype)):
+    # Mutacao:
+    # percorremos todos os pesos da rede e, com uma pequena probabilidade,
+    # alteramos ligeiramente esse peso.
+    p['fitness'] = None
+    for i in range(len(p['genotype'])):
         if random.random() < PROB_MUTATION:
-            genotype[i] += random.gauss(0.0, STD_DEV)
-            genotype[i] = max(-1.0, min(1.0, genotype[i]))
+            # random.gauss(0.0, STD_DEV) gera uma pequena alteracao aleatoria.
+            # A maioria das alteracoes fica perto de 0, mas algumas podem ser
+            # um pouco maiores. Isto permite explorar solucoes novas.
+            p['genotype'][i] += random.gauss(0.0, STD_DEV)
 
-    return {'genotype': genotype, 'fitness': None}
+            # Limita os pesos para evitar valores extremos que saturam a tanh
+            # e fazem a rede devolver quase sempre -1 ou 1.
+            p['genotype'][i] = max(-5.0, min(5.0, p['genotype'][i]))
+    return p    
     
 def survival_selection(population, offspring):
-    #reevaluation of the elite
+    # Selecao elitista de sobreviventes:
+    # mantemos os melhores individuos da geracao anterior (elite) e
+    # completamos a nova populacao com os melhores filhos.
     offspring.sort(key = lambda x: x['fitness'], reverse=True)
+
+    # A elite e reavaliada porque o Lunar Lander e estocastico:
+    # o mesmo individuo pode ter resultados ligeiramente diferentes.
     p = evaluate_population(population[:ELITE_SIZE])
-    new_population = p + offspring[ELITE_SIZE:]
+
+    # Precisamos de POPULATION_SIZE individuos no total.
+    # Se ELITE_SIZE = 1, ficamos com 1 elite + 99 melhores filhos.
+    number_of_offspring = POPULATION_SIZE - ELITE_SIZE
+    new_population = p + offspring[:number_of_offspring]
     new_population.sort(key = lambda x: x['fitness'], reverse=True)
     return new_population    
         
@@ -289,12 +391,17 @@ if __name__ == '__main__':
 
     #Pick a setting from below
     #--to evolve the controller--    
-    evolve = True
-    render_mode = None
+    #evolve = True
+    #render_mode = None
 
     #--to test the evolved controller without visualisation--
-    #evolve = False
-    #render_mode = None
+    evolve = False
+    render_mode = None
+
+    # Permite correr experiencias sem editar o ficheiro:
+    # EVOLVE=1 N_RUNS=1 LOG_PREFIX=candidate_ python NE-LunarLander-alunos.py
+    evolve = os.environ.get('EVOLVE', str(evolve)).lower() in ('1', 'true', 'yes')
+    render_mode = os.environ.get('RENDER_MODE', render_mode)
 
     #--to test the evolved controller with visualisation--
     #evolve = False
@@ -303,12 +410,13 @@ if __name__ == '__main__':
     
     if evolve:
         #evolve individuals
-        n_runs = 5
+        n_runs = int(os.environ.get('N_RUNS', 5))
+        log_prefix = os.environ.get('LOG_PREFIX', 'log')
         seeds = [964, 952, 364, 913, 140, 726, 112, 631, 881, 844, 965, 672, 335, 611, 457, 591, 551, 538, 673, 437, 513, 893, 709, 489, 788, 709, 751, 467, 596, 976]
         for i in range(n_runs):    
             random.seed(seeds[i])
             bests = evolution()
-            with open(f'log{i}.txt', 'w') as f:
+            with open(f'{log_prefix}{i}.txt', 'w') as f:
                 for b in bests:
                     f.write(f'{b[1]}\t{SHAPE}\t{b[0]}\n')
 
@@ -316,9 +424,12 @@ if __name__ == '__main__':
     else:
         #test evolved individuals
         #pick the file to test
-        filename = 'log0.txt'
+        filename = os.environ.get('TEST_LOG', 'log0.txt')
         bests = load_bests(filename)
-        b = bests[-1]
+        # O ultimo individuo guardado nem sempre e o melhor de todos.
+        # Como a avaliacao tem aleatoriedade, escolhemos o melhor fitness
+        # registado no ficheiro de log.
+        b = max(bests, key=lambda x: x[0])
         SHAPE = b[1]
         ind = b[2]
             
