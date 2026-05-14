@@ -1,3 +1,4 @@
+import argparse
 import random
 import copy
 import numpy as np
@@ -16,13 +17,14 @@ EVALUATION_EPISODES = int(os.environ.get('EVALUATION_EPISODES', 10))
 EVALUATION_SEED_OFFSET = int(os.environ.get('EVALUATION_SEED_OFFSET', 0))
 USE_FIXED_EVALUATION_SEEDS = os.environ.get('USE_FIXED_EVALUATION_SEEDS', '0').lower() in ('1', 'true', 'yes')
 STEPS = 500
+USE_ACTION_ASSIST = os.environ.get('USE_ACTION_ASSIST', '0').lower() in ('1', 'true', 'yes')
 
-NUM_PROCESSES = os.cpu_count()
+NUM_PROCESSES = int(os.environ.get('NUM_PROCESSES', os.cpu_count() or 1))
 evaluationQueue = Queue()
 evaluatedQueue = Queue()
 
 
-nInputs = 8
+nInputs = 9
 nOutputs = 2
 SHAPE = (nInputs,12,nOutputs)
 GENOTYPE_SIZE = 0
@@ -31,7 +33,7 @@ for i in range(1, len(SHAPE)):
 
 POPULATION_SIZE = 100
 NUMBER_OF_GENERATIONS = 100
-PROB_CROSSOVER = 0.9
+PROB_CROSSOVER = float(os.environ.get('PROB_CROSSOVER', 0.9))
 
 # Valor base do enunciado para a experiencia 1/3/5/7.
 # Para as experiencias 2/4/6/8, trocar para 0.05.
@@ -39,7 +41,19 @@ PROB_MUTATION = float(os.environ.get('PROB_MUTATION', 1.0/GENOTYPE_SIZE))
 STD_DEV = float(os.environ.get('STD_DEV', 0.1))
 
 
-ELITE_SIZE = 1
+ELITE_SIZE = int(os.environ.get('ELITE_SIZE', 1))
+LOG_ROOT = os.environ.get('LOG_ROOT', 'logs')
+
+EXPERIMENTS = [
+    {'id': 1, 'mutation': 0.008, 'crossover': 0.5, 'elite': 0},
+    {'id': 2, 'mutation': 0.05,  'crossover': 0.5, 'elite': 0},
+    {'id': 3, 'mutation': 0.008, 'crossover': 0.9, 'elite': 0},
+    {'id': 4, 'mutation': 0.05,  'crossover': 0.9, 'elite': 0},
+    {'id': 5, 'mutation': 0.008, 'crossover': 0.5, 'elite': 1},
+    {'id': 6, 'mutation': 0.05,  'crossover': 0.5, 'elite': 1},
+    {'id': 7, 'mutation': 0.008, 'crossover': 0.9, 'elite': 1},
+    {'id': 8, 'mutation': 0.05,  'crossover': 0.9, 'elite': 1},
+]
 
 def network(shape, observation,ind):
     # Computes the output of the neural network given the observation and the genotype.
@@ -67,8 +81,41 @@ def network(shape, observation,ind):
 
 def controller_action(shape, observation, genotype):
     # Centraliza a escolha da acao num so sitio.
-    # Neste momento usamos diretamente a saida da rede, que ja esta em [-1, 1].
-    return network(shape, observation, genotype)
+    # A rede continua a ser a parte principal do controlador, mas juntamos uma
+    # pequena correcao proporcional para evitar quedas muito rapidas e desvios
+    # laterais que ja nao dao tempo de recuperar.
+    action = np.array(network(shape, observation, genotype), dtype=float)
+
+    if not USE_ACTION_ASSIST:
+        return action
+
+    x = observation[0]
+    y = observation[1]
+    vx = observation[2]
+    vy = observation[3]
+    theta = observation[4]
+    vtheta = observation[5]
+
+    # Motor principal: se a velocidade vertical esta demasiado negativa,
+    # aumenta a potencia. Perto do chao esta correcao fica mais forte.
+    falling_too_fast = max(0.0, -vy - 0.22)
+    low_altitude = max(0.0, 0.65 - y)
+    desired_main = 0.15 + 1.15 * falling_too_fast + 0.45 * low_altitude * falling_too_fast
+    desired_main -= 0.20 * abs(theta)
+    desired_main = np.clip(desired_main, -1.0, 1.0)
+
+    # Motor lateral: se esta a direita ou a mover-se para a direita, aplica
+    # acao negativa; se esta a esquerda ou a mover-se para a esquerda, aplica
+    # acao positiva. Isto contraria o movimento e tenta recentrar a nave cedo.
+    desired_side = -(1.35 * x + 0.95 * vx + 0.25 * theta + 0.12 * vtheta)
+    desired_side = np.clip(desired_side, -1.0, 1.0)
+
+    # Mistura a decisao evoluida com a correcao. A rede ainda pode adaptar-se,
+    # mas deixa de poder ignorar completamente a travagem e o recentramento.
+    action[0] = 0.45 * action[0] + 0.55 * desired_main
+    action[1] = 0.55 * action[1] + 0.45 * desired_side
+
+    return np.clip(action, -1.0, 1.0)
 
 def check_successful_landing(observation):
     #Checks the success of the landing based on the observation
@@ -97,6 +144,7 @@ def objective_function(observation_history):
     # resultado final depois de a nave tocar no chao ou terminar o episodio.
     final_observation = observation_history[-1]
     recent_observations = observation_history[-50:]
+    approach_observations = observation_history[-100:]
 
     # Cada posicao do vetor de observacao representa uma informacao da nave.
     # x/y: posicao; vx/vy: velocidade; theta/vtheta: angulo e rotacao.
@@ -123,6 +171,16 @@ def objective_function(observation_history):
     mean_abs_vx = np.mean([abs(obs[2]) for obs in recent_observations])
     mean_abs_theta = np.mean([abs(obs[4]) for obs in recent_observations])
     mean_fast_fall = np.mean([max(0.0, -obs[3] - 0.25) for obs in recent_observations])
+    mean_outside_pad = np.mean([max(0.0, abs(obs[0]) - 0.2) for obs in approach_observations])
+    mean_outward_drift = np.mean([max(0.0, obs[0] * obs[2]) for obs in approach_observations])
+    mean_offcenter_fast_fall = np.mean([
+        abs(obs[0]) * max(0.0, -obs[3] - 0.20)
+        for obs in approach_observations
+    ])
+    mean_low_altitude_lateral_error = np.mean([
+        max(0.0, 0.45 - obs[1]) * abs(obs[0])
+        for obs in approach_observations
+    ])
 
     # Comecamos a pontuacao em zero.
     # Depois retiramos pontos por comportamentos maus e damos pontos por
@@ -143,7 +201,7 @@ def objective_function(observation_history):
 
     # Penaliza velocidades altas. Para aterrar bem, a nave deve chegar devagar.
     fitness -= 120.0 * abs(vx)
-    fitness -= 220.0 * abs(vy)
+    fitness -= 300.0 * abs(vy)
 
     # Penaliza estar inclinada ou a rodar muito.
     fitness -= 160.0 * abs(theta)
@@ -151,10 +209,24 @@ def objective_function(observation_history):
 
     # Penaliza uma aproximacao final instavel. Estes termos usam varios passos
     # recentes, nao apenas o ultimo frame.
-    fitness -= 80.0 * mean_abs_x
-    fitness -= 50.0 * mean_abs_vx
+    fitness -= 110.0 * mean_abs_x
+    fitness -= 70.0 * mean_abs_vx
     fitness -= 60.0 * mean_abs_theta
-    fitness -= 180.0 * mean_fast_fall
+    fitness -= 260.0 * mean_fast_fall
+
+    # Penaliza situacoes em que a nave ja vem sem margem para corrigir:
+    # afastada do centro, a descer depressa, ou ainda a mover-se para fora.
+    fitness -= 300.0 * mean_outside_pad
+    fitness -= 420.0 * mean_outward_drift
+    fitness -= 500.0 * mean_offcenter_fast_fall
+    fitness -= 160.0 * mean_low_altitude_lateral_error
+
+    # No estado final, estar fora da plataforma e ainda ter velocidade para
+    # fora e especialmente mau: e exatamente o caso em que ja nao ha tempo
+    # para recuperar a trajetoria.
+    final_outward_drift = max(0.0, x * vx)
+    if not on_landing_pad:
+        fitness -= 700.0 * final_outward_drift
 
     # Da premios por cumprir partes da aterragem, mas apenas quando fazem
     # sentido. O debugger mostrou que premiar "estar lento" fora da plataforma
@@ -381,13 +453,51 @@ def evolution():
 def load_bests(fname):
     #Load bests from file
     bests = []
-    with open(fname, 'r') as f:
+    with open(resolve_log_path(fname), 'r') as f:
         for line in f:
             fitness, shape, genotype = line.split('\t')
             bests.append(( eval(fitness),eval(shape), eval(genotype)))
     return bests
 
+def experiment_log_dir(experiment_id, log_root=LOG_ROOT):
+    return os.path.join(log_root, f'log_exp{experiment_id}')
+
+def experiment_log_path(experiment_id, run_index, log_prefix='log', log_root=LOG_ROOT):
+    filename = f'{log_prefix}_exp{experiment_id}_run{run_index}.txt'
+    return os.path.join(experiment_log_dir(experiment_id, log_root), filename)
+
+def resolve_log_path(fname):
+    if os.path.exists(fname):
+        return fname
+
+    basename = os.path.basename(fname)
+    for root, _, files in os.walk(LOG_ROOT):
+        if basename in files:
+            return os.path.join(root, basename)
+
+    return fname
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--evolve', action='store_true', help='Treina controladores.')
+    parser.add_argument('--test', action='store_true', help='Testa um controlador ja treinado.')
+    parser.add_argument('--all-experiments', action='store_true', help='Corre as 8 experiencias da tabela.')
+    parser.add_argument('--experiment-id', type=int, choices=range(1, 9), help='Corre apenas uma experiencia da tabela.')
+    parser.add_argument('--runs', type=int, default=None, help='Numero de runs por experiencia.')
+    parser.add_argument('--run-index', type=int, default=None, help='Corre apenas uma run especifica.')
+    parser.add_argument('--log-prefix', default=None, help='Prefixo dos ficheiros de log.')
+    parser.add_argument('--log-root', default=None, help='Pasta base dos logs.')
+    parser.add_argument('--num-processes', type=int, default=None, help='Processos usados para avaliar individuos.')
+    parser.add_argument('--generations', type=int, default=None, help='Numero de geracoes.')
+    parser.add_argument('--population-size', type=int, default=None, help='Tamanho da populacao.')
+    parser.add_argument('--evaluation-episodes', type=int, default=None, help='Episodios usados para avaliar cada individuo durante o treino.')
+    parser.add_argument('--test-log', default=None, help='Log a testar.')
+    parser.add_argument('--test-episodes', type=int, default=None, help='Episodios usados no teste.')
+    parser.add_argument('--render-mode', default=None, help='Render mode do Gymnasium, por exemplo human.')
+    return parser.parse_args()
+
 if __name__ == '__main__':
+    args = parse_args()
 
     #Pick a setting from below
     #--to evolve the controller--    
@@ -398,10 +508,29 @@ if __name__ == '__main__':
     evolve = False
     render_mode = None
 
-    # Permite correr experiencias sem editar o ficheiro:
-    # EVOLVE=1 N_RUNS=1 LOG_PREFIX=candidate_ python NE-LunarLander-alunos.py
+    # Permite correr experiencias sem editar o ficheiro, a partir do terminal:
+    # EVOLVE=1 python NE-LunarLander-alunos.py
+    # EVOLVE=1 RUN_ALL_EXPERIMENTS=0 EXPERIMENT_ID=1 N_RUNS=1 python NE-LunarLander-alunos.py
     evolve = os.environ.get('EVOLVE', str(evolve)).lower() in ('1', 'true', 'yes')
+    if args.evolve:
+        evolve = True
+    if args.test:
+        evolve = False
+
     render_mode = os.environ.get('RENDER_MODE', render_mode)
+    if args.render_mode is not None:
+        render_mode = args.render_mode
+
+    if args.num_processes is not None:
+        NUM_PROCESSES = args.num_processes
+    if args.generations is not None:
+        NUMBER_OF_GENERATIONS = args.generations
+    if args.population_size is not None:
+        POPULATION_SIZE = args.population_size
+    if args.evaluation_episodes is not None:
+        EVALUATION_EPISODES = args.evaluation_episodes
+    if args.log_root is not None:
+        LOG_ROOT = args.log_root
 
     #--to test the evolved controller with visualisation--
     #evolve = False
@@ -410,21 +539,69 @@ if __name__ == '__main__':
     
     if evolve:
         #evolve individuals
-        n_runs = int(os.environ.get('N_RUNS', 5))
-        log_prefix = os.environ.get('LOG_PREFIX', 'log')
+        n_runs = args.runs if args.runs is not None else int(os.environ.get('N_RUNS', 5))
+        log_prefix = args.log_prefix if args.log_prefix is not None else os.environ.get('LOG_PREFIX', 'log')
+        log_root = args.log_root if args.log_root is not None else LOG_ROOT
+        run_all_experiments = os.environ.get('RUN_ALL_EXPERIMENTS', '1').lower() in ('1', 'true', 'yes')
+        if args.all_experiments:
+            run_all_experiments = True
+        if args.experiment_id is not None:
+            run_all_experiments = False
+        experiment_id = args.experiment_id if args.experiment_id is not None else os.environ.get('EXPERIMENT_ID', None)
         seeds = [964, 952, 364, 913, 140, 726, 112, 631, 881, 844, 965, 672, 335, 611, 457, 591, 551, 538, 673, 437, 513, 893, 709, 489, 788, 709, 751, 467, 596, 976]
-        for i in range(n_runs):    
-            random.seed(seeds[i])
-            bests = evolution()
-            with open(f'{log_prefix}{i}.txt', 'w') as f:
-                for b in bests:
-                    f.write(f'{b[1]}\t{SHAPE}\t{b[0]}\n')
+
+        if args.run_index is not None and args.run_index >= len(seeds):
+            raise ValueError(f'Run invalida: {args.run_index}. Maximo: {len(seeds) - 1}')
+        if n_runs > len(seeds):
+            raise ValueError(f'N_RUNS demasiado grande: {n_runs}. Maximo: {len(seeds)}')
+
+        if run_all_experiments:
+            experiments_to_run = EXPERIMENTS
+        elif experiment_id is not None:
+            experiments_to_run = [exp for exp in EXPERIMENTS if exp['id'] == int(experiment_id)]
+            if len(experiments_to_run) == 0:
+                raise ValueError(f'Experiencia invalida: {experiment_id}')
+        else:
+            experiments_to_run = [{
+                'id': 'custom',
+                'mutation': PROB_MUTATION,
+                'crossover': PROB_CROSSOVER,
+                'elite': ELITE_SIZE,
+            }]
+
+        for experiment in experiments_to_run:
+            PROB_MUTATION = experiment['mutation']
+            PROB_CROSSOVER = experiment['crossover']
+            ELITE_SIZE = experiment['elite']
+
+            print(
+                f"Experiencia {experiment['id']}: "
+                f"mutacao={PROB_MUTATION}, "
+                f"crossover={PROB_CROSSOVER}, "
+                f"elitismo={ELITE_SIZE}, "
+                f"populacao={POPULATION_SIZE}, "
+                f"geracoes={NUMBER_OF_GENERATIONS}, "
+                f"processos={NUM_PROCESSES}, "
+                f"episodios_avaliacao={EVALUATION_EPISODES}"
+            )
+
+            run_indexes = [args.run_index] if args.run_index is not None else range(n_runs)
+            for i in run_indexes:
+                print(f"Run {i + 1}/{n_runs} da experiencia {experiment['id']}")
+                random.seed(seeds[i])
+                bests = evolution()
+                log_path = experiment_log_path(experiment['id'], i, log_prefix, log_root)
+                os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                with open(log_path, 'w') as f:
+                    for b in bests:
+                        f.write(f'{b[1]}\t{SHAPE}\t{b[0]}\n')
+                print(f"Log guardado em {log_path}")
 
                 
     else:
         #test evolved individuals
         #pick the file to test
-        filename = os.environ.get('TEST_LOG', 'log0.txt')
+        filename = args.test_log if args.test_log is not None else os.environ.get('TEST_LOG', 'log1.txt')
         bests = load_bests(filename)
         # O ultimo individuo guardado nem sempre e o melhor de todos.
         # Como a avaliacao tem aleatoriedade, escolhemos o melhor fitness
@@ -436,7 +613,7 @@ if __name__ == '__main__':
         ind = {'genotype': ind, 'fitness': None}
             
             
-        ntests = TEST_EPISODES
+        ntests = args.test_episodes if args.test_episodes is not None else TEST_EPISODES
 
         fit, success = 0, 0
         for i in range(1,ntests+1):

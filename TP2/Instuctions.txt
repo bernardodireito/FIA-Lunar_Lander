@@ -1,0 +1,60 @@
+Para treinar tudo de uma vez no mesmo terminal:
+python NE-LunarLander-alunos.py --evolve --all-experiments --runs 5
+
+Para treinar uma experiencia:
+python NE-LunarLander-alunos.py --evolve --experiment-id 6 --runs 5
+
+Para treinar cada experiencia em terminal separado:
+python NE-LunarLander-alunos.py --evolve --experiment-id 1 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 2 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 3 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 4 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 5 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 6 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 7 --runs 5 --num-processes 1
+python NE-LunarLander-alunos.py --evolve --experiment-id 8 --runs 5 --num-processes 1
+
+Nota:
+Isto pode ser mais rapido em tempo total se correres varios terminais ao mesmo tempo.
+Nao reduz a qualidade da avaliacao; apenas divide os processos pela CPU.
+Se correres 8 terminais e cada um usar todos os cores, fica mais lento por excesso de processos.
+
+Estrutura dos logs:
+logs/log_exp1/log_exp1_run0.txt
+logs/log_exp1/log_exp1_run1.txt
+...
+logs/log_exp8/log_exp8_run4.txt
+
+Para testar um log sem visualizacao:
+python NE-LunarLander-alunos.py --test --test-log logs/log_exp6/log_exp6_run3.txt
+
+Para testar um log com visualizacao:
+python NE-LunarLander-alunos.py --test --test-log logs/log_exp6/log_exp6_run3.txt --test-episodes 5 --render-mode human
+
+Para analisar um log especifico:
+python debug_lander.py --log logs/log_exp6/log_exp6_run3.txt --episodes 100 --mode best --show-cases 5
+
+Para analisar todos os logs individualmente:
+python debug_lander.py --episodes 100 --mode best --show-cases 0
+
+Para obter estatisticas resumidas por experiencia:
+python debug_lander.py --episodes 100 --mode best --show-cases 0 --summary
+
+Para obter estatisticas finais mais robustas, mas mais demoradas:
+python debug_lander.py --episodes 1000 --mode best --show-cases 0 --summary
+
+Para graficos rapidos usando apenas o fitness guardado nos logs de treino:
+python debug_lander.py --train-only --plots --csv --plot-dir plots
+
+Para estatisticas de teste com CSV e graficos por experiencia:
+python debug_lander.py --episodes 100 --mode best --show-cases 0 --summary --plots --csv --plot-dir plots
+
+Graficos principais para o relatorio:
+plots/training_mean_by_experiment.png
+plots/test_success_rate_by_experiment.png
+plots/test_fitness_by_experiment.png
+
+CSVs principais:
+plots/training_curves.csv
+plots/training_final.csv
+plots/test_summary.csv
