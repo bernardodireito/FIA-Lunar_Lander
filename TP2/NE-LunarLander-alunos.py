@@ -1,3 +1,12 @@
+"""Neuroevolution controller for Gymnasium LunarLander-v3.
+
+High-level flow:
+- define network/controller
+- define fitness + simulation
+- run the evolutionary loop and logging
+- CLI entrypoint for train/test
+"""
+
 import argparse
 import random
 import copy
@@ -6,6 +15,9 @@ import gymnasium as gym
 import os
 from multiprocessing import Process, Queue
 
+# -----------------------------------------------------------------------------
+# Config and experiment settings
+# -----------------------------------------------------------------------------
 # CONFIG
 ENABLE_WIND = False
 WIND_POWER = 15.0
@@ -57,7 +69,11 @@ EXPERIMENTS = [
     {'id': 8, 'mutation': 0.05,  'crossover': 0.9, 'elite': 1},
 ]
 
+# -----------------------------------------------------------------------------
+# Neural network controller
+# -----------------------------------------------------------------------------
 def network(shape, observation,ind):
+    """Forward pass of the fixed-topology tanh network."""
     # Computes the output of the neural network given the observation and the genotype.
     # O genotype tem todos os pesos da rede numa unica lista.
     # Como ha pesos para varias camadas, usamos weight_index para saber
@@ -82,6 +98,7 @@ def network(shape, observation,ind):
     return x
 
 def controller_action(shape, observation, genotype):
+    """Returns the action chosen by the network, with optional assist."""
     # Centraliza a escolha da acao num so sitio.
     # A rede continua a ser a parte principal do controlador, mas juntamos uma
     # pequena correcao proporcional para evitar quedas muito rapidas e desvios
@@ -120,6 +137,7 @@ def controller_action(shape, observation, genotype):
     return np.clip(action, -1.0, 1.0)
 
 def check_successful_landing(observation):
+    """Checks if the final observation meets landing success criteria."""
     #Checks the success of the landing based on the observation
     x = observation[0]
     vy = observation[3]
@@ -139,7 +157,11 @@ def check_successful_landing(observation):
         return True
     return False
 
+# -----------------------------------------------------------------------------
+# Fitness function
+# -----------------------------------------------------------------------------
 def objective_function(observation_history):
+    """Compute fitness and success flag from the episode observations."""
     # Esta funcao da uma pontuacao (fitness) ao individuo.
     # Quanto maior for o fitness, melhor foi o comportamento da nave.
     # Usamos a ultima observacao porque e nela que o ambiente regista o
@@ -290,7 +312,11 @@ def objective_function(observation_history):
     # 2) True/False a dizer se a aterragem foi bem sucedida.
     return fitness, successful_landing
 
+# -----------------------------------------------------------------------------
+# Simulation and evaluation
+# -----------------------------------------------------------------------------
 def simulate(genotype, render_mode = None, seed=None, env = None):
+    """Run one episode and return (fitness, success)."""
     #Simulates an episode of Lunar Lander, evaluating an individual
     env_was_none = env is None
     if env is None:
@@ -317,6 +343,7 @@ def simulate(genotype, render_mode = None, seed=None, env = None):
     return objective_function(observation_history)
 
 def evaluate(evaluationQueue, evaluatedQueue):
+    """Worker process: evaluate individuals sent through the queue."""
     #Evaluates individuals until it receives None
     #This function runs on multiple processes
     
@@ -360,6 +387,7 @@ def evaluate(evaluationQueue, evaluatedQueue):
     env.close()
     
 def evaluate_population(population):
+    """Evaluate a population using the worker processes."""
     #Evaluates a list of individuals using multiple processes
     for i in range(len(population)):
         evaluationQueue.put(population[i])
@@ -369,7 +397,11 @@ def evaluate_population(population):
         new_pop.append(ind)
     return new_pop
 
+# -----------------------------------------------------------------------------
+# Genetic operators
+# -----------------------------------------------------------------------------
 def generate_initial_population():
+    """Create the initial population with random genotypes."""
     #Generates the initial population
     population = []
     for i in range(POPULATION_SIZE):
@@ -384,6 +416,7 @@ def generate_initial_population():
     return population
 
 def parent_selection(population):
+    """Tournament selection with deep copy of the winner."""
     # Selecao por torneio:
     # escolhemos alguns individuos ao acaso e, entre esses, fica o melhor.
     # Assim damos vantagem a quem tem bom fitness, mas sem eliminar totalmente
@@ -396,6 +429,7 @@ def parent_selection(population):
     return copy.deepcopy(winner)
 
 def crossover(p1, p2):
+    """Arithmetic crossover across all genes."""
     # Crossover aritmetico:
     # cria um filho misturando os pesos (genes) dos dois pais.
     # Cada gene do filho fica entre o valor do gene do pai 1 e do pai 2.
@@ -413,6 +447,7 @@ def crossover(p1, p2):
     return {'genotype': genotype, 'fitness': None}
 
 def mutation(p):
+    """Gaussian mutation with clipping to keep weights bounded."""
     # Mutacao:
     # percorremos todos os pesos da rede e, com uma pequena probabilidade,
     # alteramos ligeiramente esse peso.
@@ -430,6 +465,7 @@ def mutation(p):
     return p    
     
 def survival_selection(population, offspring):
+    """Elitist survivor selection using current elite and best offspring."""
     # Selecao elitista de sobreviventes:
     # mantemos os melhores individuos da geracao anterior (elite) e
     # completamos a nova populacao com os melhores filhos.
@@ -447,6 +483,7 @@ def survival_selection(population, offspring):
     return new_population    
         
 def evolution():
+    """Main evolutionary loop that returns the bests per generation."""
     #Create evaluation processes
     evaluation_processes = []
     for i in range(NUM_PROCESSES):
@@ -498,7 +535,11 @@ def evolution():
     #Return the list of bests
     return bests
 
+# -----------------------------------------------------------------------------
+# Logging and experiments
+# -----------------------------------------------------------------------------
 def load_bests(fname):
+    """Load best individuals from a log file."""
     #Load bests from file
     bests = []
     with open(resolve_log_path(fname), 'r') as f:
@@ -525,7 +566,11 @@ def resolve_log_path(fname):
 
     return fname
 
+# -----------------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------------
 def parse_args():
+    """Parse CLI arguments for training/testing runs."""
     parser = argparse.ArgumentParser()
     parser.add_argument('--evolve', action='store_true', help='Treina controladores.')
     parser.add_argument('--test', action='store_true', help='Testa um controlador ja treinado.')
@@ -545,6 +590,9 @@ def parse_args():
     parser.add_argument('--render-mode', default=None, help='Render mode do Gymnasium, por exemplo human.')
     return parser.parse_args()
 
+# -----------------------------------------------------------------------------
+# Entry point
+# -----------------------------------------------------------------------------
 if __name__ == '__main__':
     args = parse_args()
 
