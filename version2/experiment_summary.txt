@@ -1,0 +1,21 @@
+Stats principais, com 100 episodios por log:
+
+Exp 1: sucesso 22.2%, fitness -318.2
+Exp 2: sucesso 23.0%, fitness -300.5
+Exp 3: sucesso 23.2%, fitness -293.5
+Exp 4: sucesso 23.0%, fitness -297.4
+Exp 5: sucesso 23.8%, fitness -272.5
+Exp 6: sucesso 22.8%, fitness -305.8
+Exp 7: sucesso 23.0%, fitness -298.4
+Exp 8: sucesso 21.4%, fitness -373.0
+
+Melhor configuracao nestes testes: Experiencia 5, com maior sucesso medio e melhor fitness medio.
+
+O que esta a falhar mais:
+
+fora da plataforma: ~62% a 63%
+queda demasiado rapida: ~50% a 52%
+pernas sem tocar: ~44% a 49%
+mau angulo: ~29% a 34%
+
+Conclusao pratica: o maior problema ainda e controlo horizontal / aterragem fora da plataforma, seguido de velocidade vertical demasiado alta.

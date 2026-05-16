@@ -13,11 +13,13 @@ TURBULENCE_POWER = 0.0
 GRAVITY = -10.0
 RENDER_MODE = 'human'
 TEST_EPISODES = 1000
-EVALUATION_EPISODES = int(os.environ.get('EVALUATION_EPISODES', 10))
+EVALUATION_EPISODES = int(os.environ.get('EVALUATION_EPISODES', 20))
 EVALUATION_SEED_OFFSET = int(os.environ.get('EVALUATION_SEED_OFFSET', 0))
 USE_FIXED_EVALUATION_SEEDS = os.environ.get('USE_FIXED_EVALUATION_SEEDS', '0').lower() in ('1', 'true', 'yes')
 STEPS = 500
 USE_ACTION_ASSIST = os.environ.get('USE_ACTION_ASSIST', '0').lower() in ('1', 'true', 'yes')
+SUCCESS_BONUS_PER_EPISODE = float(os.environ.get('SUCCESS_BONUS_PER_EPISODE', 500.0))
+CONSISTENCY_STD_PENALTY = float(os.environ.get('CONSISTENCY_STD_PENALTY', 0.12))
 
 NUM_PROCESSES = int(os.environ.get('NUM_PROCESSES', os.cpu_count() or 1))
 evaluationQueue = Queue()
@@ -181,6 +183,18 @@ def objective_function(observation_history):
         max(0.0, 0.45 - obs[1]) * abs(obs[0])
         for obs in approach_observations
     ])
+    mean_low_altitude_fast_fall = np.mean([
+        max(0.0, 0.40 - obs[1]) * max(0.0, -obs[3] - 0.18)
+        for obs in approach_observations
+    ])
+    mean_low_altitude_side_speed = np.mean([
+        max(0.0, 0.40 - obs[1]) * abs(obs[2])
+        for obs in approach_observations
+    ])
+    mean_low_altitude_tilt = np.mean([
+        max(0.0, 0.40 - obs[1]) * abs(obs[4])
+        for obs in approach_observations
+    ])
 
     # Comecamos a pontuacao em zero.
     # Depois retiramos pontos por comportamentos maus e damos pontos por
@@ -220,6 +234,9 @@ def objective_function(observation_history):
     fitness -= 420.0 * mean_outward_drift
     fitness -= 500.0 * mean_offcenter_fast_fall
     fitness -= 160.0 * mean_low_altitude_lateral_error
+    fitness -= 520.0 * mean_low_altitude_fast_fall
+    fitness -= 150.0 * mean_low_altitude_side_speed
+    fitness -= 140.0 * mean_low_altitude_tilt
 
     # No estado final, estar fora da plataforma e ainda ter velocidade para
     # fora e especialmente mau: e exatamente o caso em que ja nao ha tempo
@@ -232,22 +249,41 @@ def objective_function(observation_history):
     # sentido. O debugger mostrou que premiar "estar lento" fora da plataforma
     # ainda deixava aterragens erradas com bom fitness.
     if on_landing_pad:
-        fitness += 150.0
+        fitness += 90.0
+        if abs(x) <= 0.10:
+            fitness += 110.0
+        if abs(vx) <= 0.15:
+            fitness += 90.0
         if slow_vertical_speed:
-            fitness += 150.0
+            fitness += 110.0
         if upright:
-            fitness += 150.0
-        if legs_touching:
-            fitness += 250.0
+            fitness += 100.0
+        if legs_touching and slow_vertical_speed and upright:
+            fitness += 180.0
+        elif legs_touching:
+            fitness -= 120.0
     elif legs_touching:
         # Tocar com as duas pernas fora da plataforma nao deve parecer uma boa
         # solucao para o algoritmo evolucionario.
-        fitness -= 300.0
+        fitness -= 500.0
+
+    # Aterragens falhadas precisam de parecer claramente piores do que uma
+    # boa aproximacao. Isto reduz a tentacao de "raspar" o chao so para
+    # acumular alguns bonus locais e ajuda a diminuir overfitting.
+    if not successful_landing:
+        if not legs_touching:
+            fitness -= 320.0
+        if not on_landing_pad:
+            fitness -= 260.0 + 500.0 * max(0.0, abs(x) - 0.2)
+        if not slow_vertical_speed:
+            fitness -= 550.0 * max(0.0, -vy - 0.2)
+        if not upright:
+            fitness -= 180.0 * abs(theta)
 
     # Grande bonus se a aterragem for considerada bem sucedida.
     # Isto ajuda a evolucao a preferir claramente individuos que aterram.
     if successful_landing:
-        fitness += 2000.0
+        fitness += 1200.0
 
     # A funcao devolve duas coisas:
     # 1) o fitness usado pelo algoritmo evolucionario;
@@ -297,7 +333,8 @@ def evaluate(evaluationQueue, evaluatedQueue):
         # Avaliamos o mesmo individuo em varios episodios e usamos a media.
         # Isto reduz o efeito de "teve sorte numa tentativa" e favorece
         # controladores que funcionam de forma mais consistente.
-        fitness = 0.0
+        episode_fitnesses = []
+        successes = 0
         for episode in range(EVALUATION_EPISODES):
             # Por defeito usamos episodios aleatorios para evitar overfitting a
             # um pequeno conjunto de seeds. Se quiseres experimentar seeds fixas:
@@ -305,8 +342,19 @@ def evaluate(evaluationQueue, evaluatedQueue):
             seed = None
             if USE_FIXED_EVALUATION_SEEDS:
                 seed = EVALUATION_SEED_OFFSET + episode
-            fitness += simulate(ind['genotype'], seed = seed, env = env)[0]
-        ind['fitness'] = fitness / EVALUATION_EPISODES
+            episode_fitness, success = simulate(ind['genotype'], seed = seed, env = env)
+            episode_fitnesses.append(episode_fitness)
+            successes += int(success)
+
+        mean_fitness = float(np.mean(episode_fitnesses))
+        std_fitness = float(np.std(episode_fitnesses))
+        success_rate = successes / EVALUATION_EPISODES
+
+        ind['fitness'] = (
+            mean_fitness
+            + SUCCESS_BONUS_PER_EPISODE * success_rate
+            - CONSISTENCY_STD_PENALTY * std_fitness
+        )
                 
         evaluatedQueue.put(ind)
     env.close()
@@ -487,6 +535,7 @@ def parse_args():
     parser.add_argument('--run-index', type=int, default=None, help='Corre apenas uma run especifica.')
     parser.add_argument('--log-prefix', default=None, help='Prefixo dos ficheiros de log.')
     parser.add_argument('--log-root', default=None, help='Pasta base dos logs.')
+    parser.add_argument('--overwrite-logs', action='store_true', help='Volta a treinar mesmo que o log ja exista.')
     parser.add_argument('--num-processes', type=int, default=None, help='Processos usados para avaliar individuos.')
     parser.add_argument('--generations', type=int, default=None, help='Numero de geracoes.')
     parser.add_argument('--population-size', type=int, default=None, help='Tamanho da populacao.')
@@ -587,10 +636,14 @@ if __name__ == '__main__':
 
             run_indexes = [args.run_index] if args.run_index is not None else range(n_runs)
             for i in run_indexes:
+                log_path = experiment_log_path(experiment['id'], i, log_prefix, log_root)
+                if os.path.exists(log_path) and not args.overwrite_logs:
+                    print(f"Run {i + 1}/{n_runs} da experiencia {experiment['id']} ja existe: {log_path}")
+                    continue
+
                 print(f"Run {i + 1}/{n_runs} da experiencia {experiment['id']}")
                 random.seed(seeds[i])
                 bests = evolution()
-                log_path = experiment_log_path(experiment['id'], i, log_prefix, log_root)
                 os.makedirs(os.path.dirname(log_path), exist_ok=True)
                 with open(log_path, 'w') as f:
                     for b in bests:

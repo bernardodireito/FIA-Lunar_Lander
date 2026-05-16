@@ -1,0 +1,96 @@
+log0.txt (best)
+        train_fitness_in_log: 2158.311
+        test_avg_fitness:     9.377
+        test_avg_reward:      -136.653
+        success_rate:         23/100 (23.0%)
+        endings:              {'terminated': 100}
+        fail reasons [-2]:    {'legs_not_touching': 81, 'outside_pad': 62, 'falling_too_fast': 100, 'bad_angle': 39}
+        fail reasons [-1]:    {'legs_not_touching': 45, 'outside_pad': 63, 'falling_too_fast': 51, 'success': 23, 'bad_angle': 30}
+        final observation means:
+            x         mean=  -0.010 min=  -0.726 max=   0.684
+            y         mean=  -0.045 min=  -0.255 max=   0.156
+            vx        mean=  -0.046 min=  -1.355 max=   1.183
+            vy        mean=  -0.368 min=  -1.420 max=   0.290
+            theta     mean=  -0.016 min=  -3.273 max=   3.347
+            vtheta    mean=   0.033 min=  -7.439 max=   7.087
+            left_leg  mean=   0.710 min=   0.000 max=   1.000
+            right_leg mean=   0.750 min=   0.000 max=   1.000
+        action means:
+            main_engine mean=  -0.262 min=  -0.379 max=   0.213
+            side_engine mean=   0.027 min=  -0.389 max=   0.499
+        example seed=0 steps=52 fitness=-787.855 reward=-119.060
+            reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+            obs[-2]=[ 0.296  0.001  0.501 -1.793 -0.322  0.135  1.     0.   ]
+            reasons[-1]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+            obs[-1]=[ 0.303 -0.024  0.315 -0.811 -0.067  6.428  0.     0.   ]
+        example seed=1 steps=81 fitness=-937.888 reward=-152.422
+            reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+            obs[-2]=[-0.22  -0.015 -0.275 -1.85   0.249  0.061  0.     0.   ]
+            reasons[-1]=['outside_pad', 'falling_too_fast']
+            obs[-1]=[-0.224 -0.051 -0.847 -0.364  0.292  4.337  1.     1.   ]
+        example seed=6 steps=92 fitness=-1003.526 reward=-215.157
+            reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast', 'bad_angle']
+            obs[-2]=[-0.722 -0.084 -0.797 -1.914  0.815  0.132  0.     1.   ]
+            reasons[-1]=['legs_not_touching', 'outside_pad', 'bad_angle']
+            obs[-1]=[-0.726 -0.082 -0.385  0.018  0.838  0.507  0.     1.   ]
+        example seed=7 steps=65 fitness=-636.554 reward=-133.325
+            reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+            obs[-2]=[-0.254  0.041 -0.278 -1.697  0.276 -0.137  0.     1.   ]
+            reasons[-1]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+            obs[-1]=[-0.254  0.017  0.419 -0.532  0.123 -4.977  0.     1.   ]
+        example seed=8 steps=58 fitness=-803.388 reward=-143.892
+            reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+            obs[-2]=[-0.292 -0.044 -0.509 -1.876  0.33   0.114  0.     1.   ]
+            reasons[-1]=['outside_pad']
+            obs[-1]=[-0.299 -0.071 -0.734 -0.098  0.197  0.     1.     1.   ]
+
+
+
+
+---------------------------------------------------
+
+log1.txt (best)
+  train_fitness_in_log: 1716.039
+  test_avg_fitness:     -297.540
+  test_avg_reward:      -136.428
+  success_rate:         23/100 (23.0%)
+  endings:              {'terminated': 100}
+  fail reasons [-2]:    {'legs_not_touching': 81, 'outside_pad': 62, 'falling_too_fast': 100, 'bad_angle': 39}
+  fail reasons [-1]:    {'legs_not_touching': 45, 'outside_pad': 63, 'falling_too_fast': 50, 'success': 23, 'bad_angle': 30}
+  final observation means:
+    x         mean=  -0.010 min=  -0.726 max=   0.684
+    y         mean=  -0.045 min=  -0.255 max=   0.156
+    vx        mean=  -0.047 min=  -1.355 max=   1.183
+    vy        mean=  -0.365 min=  -1.420 max=   0.290
+    theta     mean=  -0.018 min=  -3.273 max=   3.320
+    vtheta    mean=   0.054 min=  -7.439 max=   7.087
+    left_leg  mean=   0.720 min=   0.000 max=   1.000
+    right_leg mean=   0.750 min=   0.000 max=   1.000
+  action means:
+    main_engine mean=  -0.552 min=  -0.771 max=   0.383
+    side_engine mean=   0.074 min=  -0.560 max=   0.519
+  example seed=0 steps=52 fitness=-1152.685 reward=-119.060
+    reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+    obs[-2]=[ 0.296  0.001  0.501 -1.793 -0.322  0.135  1.     0.   ]
+    reasons[-1]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+    obs[-1]=[ 0.303 -0.024  0.315 -0.811 -0.067  6.428  0.     0.   ]
+  example seed=1 steps=81 fitness=-1253.474 reward=-152.422
+    reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+    obs[-2]=[-0.22  -0.015 -0.275 -1.85   0.249  0.061  0.     0.   ]
+    reasons[-1]=['outside_pad', 'falling_too_fast']
+    obs[-1]=[-0.224 -0.051 -0.847 -0.364  0.292  4.337  1.     1.   ]
+  example seed=6 steps=92 fitness=-1671.149 reward=-215.157
+    reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast', 'bad_angle']
+    obs[-2]=[-0.722 -0.084 -0.797 -1.914  0.815  0.132  0.     1.   ]
+    reasons[-1]=['legs_not_touching', 'outside_pad', 'bad_angle']
+    obs[-1]=[-0.726 -0.082 -0.385  0.018  0.838  0.507  0.     1.   ]
+  example seed=7 steps=65 fitness=-853.258 reward=-133.325
+    reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+    obs[-2]=[-0.254  0.041 -0.278 -1.697  0.276 -0.137  0.     1.   ]
+    reasons[-1]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+    obs[-1]=[-0.254  0.017  0.419 -0.532  0.123 -4.977  0.     1.   ]
+  example seed=8 steps=58 fitness=-1183.846 reward=-143.892
+    reasons[-2]=['legs_not_touching', 'outside_pad', 'falling_too_fast']
+    obs[-2]=[-0.292 -0.044 -0.509 -1.876  0.33   0.114  0.     1.   ]
+    reasons[-1]=['outside_pad']
+    obs[-1]=[-0.299 -0.071 -0.734 -0.098  0.197  0.     1.     1.   ]

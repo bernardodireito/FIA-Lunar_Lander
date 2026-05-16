@@ -27,17 +27,12 @@ def load_controller(lander, filename, mode):
 
 
 def find_log_files(log_root):
-    experiment_logs = []
-    all_logs = []
-
-    search_roots = [log_root]
-    if log_root != ".":
-        search_roots.append(".")
-
-    seen = set()
-    for search_root in search_roots:
+    def collect_logs(search_root):
+        experiment_logs = []
+        all_logs = []
         if not os.path.exists(search_root):
-            continue
+            return experiment_logs, all_logs
+        seen = set()
         for root, _, files in os.walk(search_root):
             for filename in files:
                 if not (filename.startswith("log") and filename.endswith(".txt")):
@@ -50,6 +45,11 @@ def find_log_files(log_root):
                 all_logs.append(path)
                 if re.match(r"^log_exp[^_]+_run\d+\.txt$", filename):
                     experiment_logs.append(path)
+        return experiment_logs, all_logs
+
+    experiment_logs, all_logs = collect_logs(log_root)
+    if not experiment_logs and not all_logs and log_root != ".":
+        experiment_logs, all_logs = collect_logs(".")
 
     return sorted(experiment_logs if experiment_logs else all_logs)
 
@@ -305,7 +305,7 @@ def write_experiment_summary_txt(path, summary_rows):
     best_row = max(summary_rows, key=lambda row: (row["success_mean"], row["fitness_mean"]))
 
     lines = []
-    lines.append("Stats principais, com 100 episodios por log:")
+    lines.append("Stats principais por experiencia:")
     lines.append("")
     for row in summary_rows:
         lines.append(
