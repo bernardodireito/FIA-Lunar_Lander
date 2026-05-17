@@ -18,7 +18,6 @@ from multiprocessing import Process, Queue
 # -----------------------------------------------------------------------------
 # Config and experiment settings
 # -----------------------------------------------------------------------------
-# CONFIG
 ENABLE_WIND = False
 WIND_POWER = 15.0
 TURBULENCE_POWER = 0.0
@@ -29,6 +28,9 @@ EVALUATION_EPISODES = int(os.environ.get('EVALUATION_EPISODES', 20))
 EVALUATION_SEED_OFFSET = int(os.environ.get('EVALUATION_SEED_OFFSET', 0))
 USE_FIXED_EVALUATION_SEEDS = os.environ.get('USE_FIXED_EVALUATION_SEEDS', '0').lower() in ('1', 'true', 'yes')
 STEPS = 500
+
+# Deve ficar desligado nos testes oficiais. Foi mantido apenas para experiencias
+# de debug, porque adiciona uma correcao manual por cima da rede neuronal.
 USE_ACTION_ASSIST = os.environ.get('USE_ACTION_ASSIST', '0').lower() in ('1', 'true', 'yes')
 SUCCESS_BONUS_PER_EPISODE = float(os.environ.get('SUCCESS_BONUS_PER_EPISODE', 1000.0))
 SUCCESS_RATE_BONUS = float(os.environ.get('SUCCESS_RATE_BONUS', 800.0))
@@ -48,8 +50,8 @@ POPULATION_SIZE = 100
 NUMBER_OF_GENERATIONS = 100
 PROB_CROSSOVER = float(os.environ.get('PROB_CROSSOVER', 0.9))
 
-# Valor base do enunciado para a experiencia 1/3/5/7.
-# Para as experiencias 2/4/6/8, trocar para 0.05.
+# Estes valores so sao usados em runs custom. Nas experiencias oficiais, os
+# valores de mutacao/crossover/elitismo sao definidos pela tabela EXPERIMENTS.
 PROB_MUTATION = float(os.environ.get('PROB_MUTATION', 1.0/GENOTYPE_SIZE))
 STD_DEV = float(os.environ.get('STD_DEV', 0.1))
 
@@ -73,7 +75,6 @@ EXPERIMENTS = [
 # -----------------------------------------------------------------------------
 def network(shape, observation,ind):
     """Forward pass of the fixed-topology tanh network."""
-    # Computes the output of the neural network given the observation and the genotype.
     # O genotype tem todos os pesos da rede numa unica lista.
     # Como ha pesos para varias camadas, usamos weight_index para saber
     # em que parte dessa lista estamos.
@@ -92,9 +93,6 @@ def network(shape, observation,ind):
 def controller_action(shape, observation, genotype):
     """Returns the action chosen by the network, with optional assist."""
     # Centraliza a escolha da acao num so sitio.
-    # A rede continua a ser a parte principal do controlador, mas juntamos uma
-    # pequena correcao proporcional para evitar quedas muito rapidas e desvios
-    # laterais que ja nao dao tempo de recuperar.
     action = np.array(network(shape, observation, genotype), dtype=float)
 
     if not USE_ACTION_ASSIST:
@@ -130,7 +128,6 @@ def controller_action(shape, observation, genotype):
 
 def check_successful_landing(observation):
     """Checks if the final observation meets landing success criteria."""
-    #Checks the success of the landing based on the observation
     x = observation[0]
     vy = observation[3]
     theta = observation[4]
@@ -172,11 +169,13 @@ def objective_function(observation_history):
     vtheta = final_observation[5]
     contact_left = final_observation[6]
     contact_right = final_observation[7]
+
     pre_x = pre_final_observation[0]
     pre_y = pre_final_observation[1]
     pre_vx = pre_final_observation[2]
     pre_vy = pre_final_observation[3]
     pre_theta = pre_final_observation[4]
+
 
     successful_landing = check_successful_landing(final_observation)
     legs_touching = contact_left == 1 and contact_right == 1
@@ -193,12 +192,19 @@ def objective_function(observation_history):
     fitness = 0.0
 
     # Penalizacoes base: estas mantem a nave perto do centro, lenta e direita.
+    # longe do centro
     fitness -= 240.0 * abs(x)
+    # andar para o lado depressa
     fitness -= 120.0 * abs(vx)
+    # cair depressa
     fitness -= 280.0 * max(0.0, -vy)
+    # inclinacao
     fitness -= 160.0 * abs(theta)
+    # rotacao
     fitness -= 35.0 * abs(vtheta)
+    # longe do centro perto do chao
     fitness -= 420.0 * max(0.0, abs(x) - 0.2)
+
 
     # Historico recente: cair depressa perto do fim deve ser mau mesmo que o
     # ultimo estado fique "limpo" depois da terminacao do ambiente.
@@ -262,7 +268,6 @@ def objective_function(observation_history):
 # -----------------------------------------------------------------------------
 def simulate(genotype, render_mode = None, seed=None, env = None):
     """Run one episode and return (fitness, success)."""
-    #Simulates an episode of Lunar Lander, evaluating an individual
     env_was_none = env is None
     if env is None:
         env = gym.make("LunarLander-v3", render_mode =render_mode, 
@@ -274,7 +279,6 @@ def simulate(genotype, render_mode = None, seed=None, env = None):
 
     observation_history = [observation]
     for _ in range(STEPS):
-        #Chooses an action based on the individual's genotype
         action = controller_action(SHAPE, observation, genotype)
         observation, reward, terminated, truncated, info = env.step(action)        
         observation_history.append(observation)
@@ -289,8 +293,8 @@ def simulate(genotype, render_mode = None, seed=None, env = None):
 
 def evaluate(evaluationQueue, evaluatedQueue):
     """Worker process: evaluate individuals sent through the queue."""
-    #Evaluates individuals until it receives None
-    #This function runs on multiple processes
+    # Cada processo reutiliza o seu ambiente para evitar criar um Gym novo em
+    # todas as avaliacoes.
     
     env = gym.make("LunarLander-v3", render_mode =None, 
         continuous=True, gravity=GRAVITY, 
@@ -334,7 +338,6 @@ def evaluate(evaluationQueue, evaluatedQueue):
     
 def evaluate_population(population, evaluation_queue, evaluated_queue):
     """Evaluate a population using the worker processes."""
-    #Evaluates a list of individuals using multiple processes
     for i in range(len(population)):
         evaluation_queue.put(population[i])
     new_pop = []
@@ -348,13 +351,10 @@ def evaluate_population(population, evaluation_queue, evaluated_queue):
 # -----------------------------------------------------------------------------
 def generate_initial_population():
     """Create the initial population with random genotypes."""
-    #Generates the initial population
     population = []
     for i in range(POPULATION_SIZE):
-        #Each individual is a dictionary with a genotype and a fitness value
-        #At this time, the fitness value is None
-        #The genotype is a list of floats sampled from a uniform distribution between -1 and 1
-        
+        # A populacao inicial tem de ser aleatoria: nao usamos controladores
+        # guardados de experiencias anteriores.
         genotype = []
         for j in range(GENOTYPE_SIZE):
             genotype += [random.uniform(-1,1)]
@@ -430,7 +430,7 @@ def survival_selection(population, offspring, evaluation_queue, evaluated_queue)
     p = evaluate_population(population[:ELITE_SIZE], evaluation_queue, evaluated_queue)
 
     # Precisamos de POPULATION_SIZE individuos no total.
-    # Se ELITE_SIZE = 1, ficamos com 1 elite + 99 melhores filhos.
+    # O resto da populacao vem dos melhores filhos.
     number_of_offspring = POPULATION_SIZE - ELITE_SIZE
     new_population = p + offspring[:number_of_offspring]
     new_population.sort(key = lambda x: x['fitness'], reverse=True)
@@ -441,14 +441,13 @@ def evolution():
     evaluation_queue = Queue()
     evaluated_queue = Queue()
 
-    #Create evaluation processes
+    # Cria os processos que avaliam individuos em paralelo dentro desta run.
     evaluation_processes = []
     for i in range(NUM_PROCESSES):
         evaluation_processes.append(Process(target=evaluate, args=(evaluation_queue, evaluated_queue)))
         evaluation_processes[-1].start()
 
     try:
-        #Create initial population
         bests = []
         population = list(generate_initial_population())
         population = evaluate_population(population, evaluation_queue, evaluated_queue)
@@ -456,11 +455,9 @@ def evolution():
         best = (population[0]['genotype']), population[0]['fitness']
         bests.append(best)
         
-        #Iterate over generations
         for gen in range(NUMBER_OF_GENERATIONS):
             offspring = []
             
-            #create offspring
             while len(offspring) < POPULATION_SIZE:
                 if random.random() < PROB_CROSSOVER:
                     p1 = parent_selection(population)
@@ -473,24 +470,20 @@ def evolution():
                 ni = mutation(ni)
                 offspring.append(ni)
                 
-            #Evaluate offspring
             offspring = evaluate_population(offspring, evaluation_queue, evaluated_queue)
 
-            #Apply survival selection
             population = survival_selection(population, offspring, evaluation_queue, evaluated_queue)
             
-            #Print and save the best of the current generation
             best = (population[0]['genotype']), population[0]['fitness']
             bests.append(best)
             print(f'Best of generation {gen}: {best[1]}')
     finally:
-        #Stop evaluation processes
+        # Garante que os processos fecham mesmo se houver erro durante a run.
         for i in range(NUM_PROCESSES):
             evaluation_queue.put(None)
         for p in evaluation_processes:
             p.join()
 
-    #Return the list of bests
     return bests
 
 # -----------------------------------------------------------------------------
@@ -498,7 +491,6 @@ def evolution():
 # -----------------------------------------------------------------------------
 def load_bests(fname):
     """Load best individuals from a log file."""
-    #Load bests from file
     bests = []
     with open(resolve_log_path(fname), 'r') as f:
         for line in f:
@@ -638,18 +630,12 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    #Pick a setting from below
-    #--to evolve the controller--    
+    # Por defeito treina. A flag --test muda para modo de teste.
     evolve = True
     render_mode = None
 
-    #--to test the evolved controller without visualisation--
-    #evolve = False
-    #render_mode = None
-
-    # Permite correr experiencias sem editar o ficheiro, a partir do terminal:
-    # EVOLVE=1 python NE-LunarLander-alunos.py
-    # EVOLVE=1 RUN_ALL_EXPERIMENTS=0 EXPERIMENT_ID=1 N_RUNS=1 python NE-LunarLander-alunos.py
+    # Tambem e possivel configurar por variaveis de ambiente, mas a CLI tem
+    # prioridade quando os argumentos sao passados no terminal.
     evolve = os.environ.get('EVOLVE', str(evolve)).lower() in ('1', 'true', 'yes')
     if args.evolve:
         evolve = True
@@ -677,13 +663,7 @@ if __name__ == '__main__':
     if args.log_root is not None:
         LOG_ROOT = args.log_root
 
-    #--to test the evolved controller with visualisation--
-    #evolve = False
-    #render_mode = 'human'
-    
-    
     if evolve:
-        #evolve individuals
         n_runs = args.runs if args.runs is not None else int(os.environ.get('N_RUNS', 5))
         log_prefix = args.log_prefix if args.log_prefix is not None else os.environ.get('LOG_PREFIX', 'log')
         log_root = args.log_root if args.log_root is not None else LOG_ROOT
@@ -753,8 +733,6 @@ if __name__ == '__main__':
 
                 
     else:
-        #test evolved individuals
-        #pick the file to test
         filename = args.test_log if args.test_log is not None else os.environ.get('TEST_LOG', 'log1.txt')
         bests = load_bests(filename)
         # O ultimo individuo guardado nem sempre e o melhor de todos.
