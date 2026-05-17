@@ -1,6 +1,7 @@
 Stats principais por experiencia:
 
-Exp 2: sucesso 28.8%, fitness -254.5
+Exp 1: sucesso 31.8%, fitness -25.5
+Exp 2: sucesso 37.3%, fitness 155.1
 Exp 3: sucesso 37.8%, fitness 263.8
 Exp 4: sucesso 26.2%, fitness -361.8
 Exp 5: sucesso 26.5%, fitness -340.8
