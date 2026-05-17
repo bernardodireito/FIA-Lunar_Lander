@@ -19,7 +19,7 @@ from multiprocessing import Process, Queue
 # Config and experiment settings
 # -----------------------------------------------------------------------------
 # CONFIG
-ENABLE_WIND = False
+ENABLE_WIND = True
 WIND_POWER = 15.0
 TURBULENCE_POWER = 0.0
 GRAVITY = -10.0
