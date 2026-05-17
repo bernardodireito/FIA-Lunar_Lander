@@ -241,6 +241,64 @@ def load_training_curve(lander, filename):
     return rows
 
 
+def experiment_config_label(lander, experiment_id):
+    for experiment in getattr(lander, "EXPERIMENTS", []):
+        if str(experiment.get("id")) == str(experiment_id):
+            return (
+                f"Exp {experiment_id} "
+                f"(mut={experiment['mutation']}, cross={experiment['crossover']}, elite={experiment['elite']})"
+            )
+    return f"Exp {experiment_id}"
+
+
+def simulate_success_rate(lander, genotype, shape, episodes, seed_offset, env):
+    lander.SHAPE = shape
+    successes = 0
+    for episode in range(episodes):
+        observation, info = env.reset(seed=seed_offset + episode)
+        observations = [observation]
+        for _ in range(lander.STEPS):
+            action = lander.controller_action(shape, observation, genotype)
+            observation, reward, terminated, truncated, info = env.step(action)
+            observations.append(observation)
+            if terminated or truncated:
+                break
+        successes += int(lander.check_successful_landing(observations[-1]))
+    return successes / episodes
+
+
+def load_success_curve(lander, filename, episodes, stride, seed_offset):
+    bests = lander.load_bests(filename)
+    rows = []
+    env = gym.make(
+        "LunarLander-v3",
+        render_mode=None,
+        continuous=True,
+        gravity=lander.GRAVITY,
+        enable_wind=lander.ENABLE_WIND,
+        wind_power=lander.WIND_POWER,
+        turbulence_power=lander.TURBULENCE_POWER,
+    )
+    try:
+        for generation, best in enumerate(bests):
+            if generation % stride != 0 and generation != len(bests) - 1:
+                continue
+            train_fitness, shape, genotype = best
+            success_rate = simulate_success_rate(lander, genotype, shape, episodes, seed_offset, env)
+            rows.append({
+                "filename": filename,
+                "experiment": experiment_id_from_filename(filename),
+                "run": run_id_from_filename(filename),
+                "generation": generation,
+                "train_fitness": float(train_fitness),
+                "success_rate": success_rate,
+                "episodes": episodes,
+            })
+    finally:
+        env.close()
+    return rows
+
+
 def write_csv(path, rows, fieldnames):
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -488,6 +546,42 @@ def plot_test_summary(results, plot_dir):
     plt.close()
 
 
+def plot_success_curves_by_experiment(lander, success_rows, plot_dir):
+    prepare_matplotlib(plot_dir)
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    experiments = sorted({row["experiment"] for row in success_rows}, key=sort_experiment_key)
+    plt.figure(figsize=(13, 7))
+
+    for experiment in experiments:
+        exp_rows = [row for row in success_rows if row["experiment"] == experiment]
+        generations = sorted({row["generation"] for row in exp_rows})
+        means = []
+        stds = []
+        for generation in generations:
+            values = np.array([row["success_rate"] for row in exp_rows if row["generation"] == generation])
+            means.append(values.mean())
+            stds.append(values.std())
+
+        generations = np.array(generations)
+        means = np.array(means)
+        stds = np.array(stds)
+        plt.plot(generations, means, linewidth=2, label=experiment_config_label(lander, experiment))
+        plt.fill_between(generations, means - stds, means + stds, alpha=0.10)
+
+    plt.xlabel("Geracao")
+    plt.ylabel("Taxa de sucesso media")
+    plt.ylim(0, 1)
+    plt.title("Evolucao da taxa de sucesso media por experiencia")
+    plt.grid(True, alpha=0.25)
+    plt.legend(fontsize=8)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plot_dir, "success_curves_mean_by_experiment.png"), dpi=160)
+    plt.close()
+
+
 def print_experiment_stats(results):
     grouped = {}
     for result in results:
@@ -545,6 +639,10 @@ def main():
     parser.add_argument("--show-cases", type=int, default=3)
     parser.add_argument("--summary", action="store_true", help="Print aggregate stats grouped by experiment.")
     parser.add_argument("--train-only", action="store_true", help="Only analyze fitness values stored in the training logs.")
+    parser.add_argument("--success-curves", action="store_true", help="Evaluate saved generations and plot mean success-rate curves by experiment.")
+    parser.add_argument("--curve-episodes", type=int, default=30, help="Episodes used to estimate success rate for each saved generation.")
+    parser.add_argument("--curve-stride", type=int, default=5, help="Evaluate one saved generation every N generations for success curves.")
+    parser.add_argument("--curve-seed-offset", type=int, default=0, help="Seed offset used when estimating success curves.")
     parser.add_argument("--plots", action="store_true", help="Create matplotlib plots in the plot directory.")
     parser.add_argument("--plot-dir", default="plots", help="Directory where plots and CSV files are written.")
     parser.add_argument("--log-root", default="logs", help="Directory where experiment log folders are stored.")
@@ -560,6 +658,37 @@ def main():
 
     if not logs:
         raise SystemExit("No log files found.")
+
+    if args.success_curves:
+        if args.curve_episodes <= 0:
+            raise SystemExit("--curve-episodes must be positive.")
+        if args.curve_stride <= 0:
+            raise SystemExit("--curve-stride must be positive.")
+
+        success_rows = []
+        for log_index, filename in enumerate(logs, start=1):
+            print(f"Success curve {log_index}/{len(logs)}: {filename}")
+            success_rows.extend(
+                load_success_curve(
+                    lander,
+                    filename,
+                    args.curve_episodes,
+                    args.curve_stride,
+                    args.curve_seed_offset,
+                )
+            )
+
+        ensure_plot_dir(args.plot_dir)
+        if args.csv:
+            write_csv(
+                os.path.join(args.plot_dir, "success_curves.csv"),
+                success_rows,
+                ["filename", "experiment", "run", "generation", "train_fitness", "success_rate", "episodes"],
+            )
+        if args.plots:
+            plot_success_curves_by_experiment(lander, success_rows, args.plot_dir)
+            print(f"\nGrafico guardado em: {os.path.join(args.plot_dir, 'success_curves_mean_by_experiment.png')}")
+        return
 
     if args.train_only:
         training_rows = []
